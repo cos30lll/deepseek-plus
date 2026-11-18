@@ -16,4 +16,6 @@ pnpm --dir web dev
 
 打开 `http://localhost:8090`，在「设置 → API 配置」里填入 DeepSeek 的 API Key。这里也支持 OpenAI 和 Anthropic 兼容接口。
 
+也可以使用 [ECAPI 中转站](https://ecmod.zhake.win)，接口地址为 `https://ecmod.zhake.win/v1`。
+
 [构建 Android 版](docs/BUILD.md#android) · [备份格式](docs/ARCHIVE_FORMATS.md) · [MIT 许可证](LICENSE)
