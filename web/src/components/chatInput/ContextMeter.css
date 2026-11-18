@@ -1,0 +1,50 @@
+.source-context-meter {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 38px;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-brand-text);
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.source-context-meter:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.source-context-meter:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.source-context-meter-warning { color: #c98614; }
+.source-context-meter-danger { color: var(--dsw-alias-state-error-primary, #df5050); }
+.source-context-meter svg { position: absolute; inset: 1px; transform: rotate(-90deg); pointer-events: none; }
+.source-context-meter circle { fill: none; stroke-width: 2.6; }
+.source-context-meter-track { stroke: var(--dsw-alias-border-l2); }
+.source-context-meter-fill { stroke: currentColor; stroke-linecap: round; transition: stroke-dashoffset 0.2s ease, stroke 0.2s ease; }
+.source-context-meter > span { position: relative; font-size: 9px; font-weight: 600; line-height: 1; letter-spacing: -0.3px; font-variant-numeric: tabular-nums; pointer-events: none; }
+.source-context-meter-panel {
+  position: fixed;
+  z-index: 1200;
+  box-sizing: border-box;
+  width: 238px;
+  max-width: calc(100vw - 16px);
+  padding: 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
+  background: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: 0 6px 24px #0002;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: default;
+}
+.source-context-meter-panel strong { font-size: 13px; font-weight: 600; }
+.source-context-meter-panel dl { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; margin: 10px 0; }
+.source-context-meter-panel dt { color: var(--dsw-alias-label-secondary); }
+.source-context-meter-panel dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.source-context-meter-panel p { margin: 8px 0 10px; color: var(--dsw-alias-label-secondary); font-size: 11px; }
+.source-context-meter-panel > button { width: 100%; border: 1px solid var(--dsw-alias-border-l2); border-radius: 9px; padding: 6px 10px; background: transparent; color: var(--dsw-alias-brand-text); font: inherit; cursor: pointer; }
+.source-context-meter-panel > button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+@media (prefers-reduced-motion: reduce) { .source-context-meter-fill { transition: none; } }

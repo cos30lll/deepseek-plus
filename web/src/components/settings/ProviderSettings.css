@@ -1,0 +1,36 @@
+.source-settings { width: 100%; min-width: 0; color: var(--dsw-alias-label-primary); }
+.source-group { margin: 0 0 18px; }
+.source-group h3 { margin: 12px 2px 8px; color: var(--dsw-alias-label-secondary); font-size: 12px; font-weight: 500; }
+.source-group > div { border: 1px solid color-mix(in srgb, currentColor 9%, transparent); border-radius: 16px; overflow: hidden; }
+.source-row { display: flex; align-items: center; gap: 12px; padding: 13px 14px; min-height: 48px; box-sizing: border-box; font-size: 14px; }
+.source-row + .source-row { border-top: 1px solid color-mix(in srgb, currentColor 6%, transparent); }
+.source-row > span { flex-shrink: 0; }
+.source-value { display: flex; flex: 1; min-width: 0; justify-content: flex-end; }
+.source-value input:not([type=checkbox]), .source-name, .source-prompt textarea { width: 100%; min-width: 0; padding: 8px 10px; box-sizing: border-box; background: color-mix(in srgb, currentColor 5%, transparent); color: inherit; border: none; outline: none; border-radius: 9px; font: inherit; }
+.source-value input:not([type=checkbox]) { text-align: right; }
+.source-value input:focus, .source-prompt textarea:focus, .source-name:focus { box-shadow: 0 0 0 1px #4d6bfe; }
+.source-value input[type=checkbox] { width: 19px; height: 19px; accent-color: #4d6bfe; }
+.source-value > button { max-width: 100%; }
+.source-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; }
+.source-note { margin: 8px 14px 12px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.source-prompt { display: block; padding: 13px 14px; font-size: 14px; }
+.source-prompt textarea { display: block; margin-top: 10px; resize: vertical; }
+.source-model-dialog { width: 560px; max-height: calc(100dvh - 32px); }
+.source-model-dialog > div:nth-child(2) { min-height: 0; overflow-y: auto; }
+@media (max-width: 640px) { .source-row { gap: 8px; padding: 12px; } .source-value { max-width: 72%; margin-left: auto; } .source-note { margin-left: 10px; margin-right: 10px; } .source-model-dialog { width: calc(100% - 24px); } }
+
+.source-context-progress { padding: 6px 16px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.source-summary { padding: 0 14px 12px; font-size: 12px; }
+.source-summary summary { cursor: pointer; }
+.source-summary pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; font: inherit; }
+
+.source-slider { align-items: center; gap: 10px; }
+.source-slider input[type=range] { padding: 0; width: 150px; accent-color: #4d6bfe; }
+.source-slider output { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+.source-recap-text { padding: 0 14px 14px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 42dvh; overflow-y: auto; font: inherit; line-height: 1.65; }
+.source-preset-check { display: flex; align-items: center; gap: 10px; }
+.source-preset-check input { accent-color: #4d6bfe; }
+@media (max-width:640px) { .source-slider input[type=range] { width: 110px; } }
+
+.source-model-dialog .source-prompt textarea { max-width: 100%; }
+.source-value input:disabled { opacity: .45; }

@@ -1,0 +1,42 @@
+# Build output and local caches
+node_modules/
+dist/
+/build/
+/android-build/
+coverage/
+*.tsbuildinfo
+*.log
+*.tmp
+*.apk
+*.aab
+*.idsig
+__pycache__/
+*.py[cod]
+
+# Machine and editor configuration
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+local.properties
+
+# Credentials, signing files and exported user data
+.env
+.env.*
+!.env.example
+.npmrc
+/.signing/
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.zip
+*.tgz
+*.db
+*.sqlite*
+/backup/
+/backups/
+deepseek_data-*.json
+last-import-report.json
