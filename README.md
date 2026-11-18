@@ -2,7 +2,7 @@
 
 用自己的 API Key 在网页或 Android 上聊天。项目基于 [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo)。
 
-聊天记录保存在本机。你可以从一条消息另开分支，也可以导入 DeepSeek、Simple Chat 或 Chatbox 的旧对话，接着上次的话题聊。
+聊天记录保存在本机。你可以从一条消息另开分支，也可以导入 DeepSeek 或 Chatbox 的旧对话，接着上次的话题聊。
 
 ## 运行网页版
 
