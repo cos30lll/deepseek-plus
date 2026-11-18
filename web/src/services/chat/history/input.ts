@@ -1,6 +1,8 @@
 import type { Session } from '../types.js'
 import type { StoredFile } from '../db.js'
 import type { BackupSettings, ImportCandidate, ImportSource } from './importTypes.js'
+import type { ImportControl, HistoryImportStage } from './importProgress.js'
+import { readBackupBuffer } from './readBackup.js'
 import { objectArray, objectMetadata } from './jsonStream.js'
 import { isZipFile, openArchive, type IndexedArchive } from './zipReader.js'
 import { checkManifest } from './schema.js'
@@ -8,7 +10,28 @@ import { deepseekIndex, deepseekSession } from './deepseek.js'
 import { chatboxSession, inlineAttachment, simpleChatSession, type ResolveImage } from './foreign.js'
 import { list, readNativeSession, readParameters, readPresets, record, text } from './portable.js'
 export type ImportTask = { id: string; title: string; load: () => Promise<ImportCandidate> }
-export type ImportInput = { source: ImportSource; settings: BackupSettings; indexVerified: boolean | null; warnings: string[]; tasks: AsyncIterable<ImportTask> }
+export type ImportInput = { source: ImportSource; settings: BackupSettings; indexVerified: boolean | null; warnings: string[]; total?: number; tasks: AsyncIterable<ImportTask> }
+// WebView can reopen a document provider on every File slice. Snapshot a small ZIP
+// once; bigger archives still use bounded ranges and never load the entire file.
+const ZIP_SNAPSHOT_MAX = 24 * 1024 * 1024
+
+const reportBytes = (control: ImportControl | undefined, total: number) => {
+  let last = 0
+  return (completed: number) => {
+    const now = performance.now()
+    if (completed >= total || now - last >= 80) {
+      control?.report({ bytes: { completed, total } })
+      last = now
+    }
+  }
+}
+
+const readEntry = async (zip: IndexedArchive, name: string, stage: HistoryImportStage, control?: ImportControl) => {
+  const total = zip.size(name)
+  control?.report({ stage, bytes: { completed: 0, total }, records: null })
+  return zip.get(name, control ? reportBytes(control, total) : undefined)
+}
+
 const json = async (blob: Blob) => record(JSON.parse(await blob.text()))
 const taskMetadata = (v: unknown) => { const r = v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {}; return { id: text(r.id), title: text(r.title ?? r.name) } }
 const chatboxPresets = (meta: Record<string, unknown>) => {
@@ -21,12 +44,13 @@ const zipImage = (zip?: IndexedArchive, resources: unknown[] = []): ResolveImage
   return async (r, id) => {
     if (text(r.data) || text(r.url).startsWith('data:')) return inlineAttachment({ ...r, data: r.data ?? r.url }, id)
     const resource = paths.get(text(r.storageKey)), path = text(resource?.path ?? r.path).normalize('NFC')
-    if (!zip || !path || !zip.names.includes(path)) return undefined
+    if (!zip || !path || !zip.has(path)) return undefined
     return { id, blob: new Blob([await zip.get(path)], { type: text(resource?.mimeType ?? r.mime ?? r.mimeType, 'image/jpeg') }) }
   }
 }
-const blobInput = async (blob: Blob, repair: boolean, zip?: IndexedArchive): Promise<ImportInput> => {
-  const meta = await objectMetadata(blob, new Set(['conversations', 'sessions']))
+const blobInput = async (blob: Blob, repair: boolean, zip?: IndexedArchive, control?: ImportControl): Promise<ImportInput> => {
+  control?.report({ stage: 'checking', bytes: null, records: null })
+  const meta = await objectMetadata(blob, new Set(['conversations', 'sessions']), control?.signal)
   const format = text(meta.format), warnings: string[] = []
   if (format !== 'simplechat-backup' && format !== 'chatbox-backup') throw new Error('不支持的备份格式')
   if (format === 'simplechat-backup' && meta.version !== 2) throw new Error('仅支持 Simple Chat 备份版本 2')
@@ -35,30 +59,42 @@ const blobInput = async (blob: Blob, repair: boolean, zip?: IndexedArchive): Pro
   if (source === 'chatbox') warnings.push('Chatbox 仅导入可见消息分支。')
   const resolve = zipImage(zip, list(meta.resources)), presets = source === 'simplechat' ? readPresets(meta.presets) : chatboxPresets(meta)
   const tasks = async function* (): AsyncGenerator<ImportTask> {
-    for await (const value of objectArray(blob, array)) yield { ...taskMetadata(value), load: () => source === 'simplechat' ? simpleChatSession(value, repair, resolve) : chatboxSession(value, repair, resolve) }
+    for await (const value of objectArray(blob, array, control?.signal)) yield { ...taskMetadata(value), load: () => source === 'simplechat' ? simpleChatSession(value, repair, resolve) : chatboxSession(value, repair, resolve) }
   }
   return { source, warnings, settings: { presets }, indexVerified: null, tasks: tasks() }
 }
-export const readImportInput = async (file: File, repair: boolean): Promise<ImportInput> => {
-  if (!await isZipFile(file)) return blobInput(file, repair)
-  const zip = await openArchive(file), manifest = zip.names.includes('manifest.json') ? await json(await zip.get('manifest.json')) : {}
+export const readImportInput = async (file: File, repair: boolean, control?: ImportControl): Promise<ImportInput> => {
+  const signal = control?.signal
+  if (!await isZipFile(file, signal)) return blobInput(file, repair, undefined, control)
+  let snapshot: ArrayBuffer | undefined
+  if (file.size <= ZIP_SNAPSHOT_MAX) {
+    control?.report({ stage: 'reading', bytes: { completed: 0, total: file.size } })
+    snapshot = await readBackupBuffer(file, signal, reportBytes(control, file.size))
+    control?.report({ bytes: { completed: snapshot.byteLength, total: file.size } })
+  }
+  control?.report({ stage: 'directory', bytes: null, records: null })
+  const zip = await openArchive(file, signal, snapshot)
+  const manifest = zip.has('manifest.json') ? await json(await zip.get('manifest.json')) : {}
   if ('export_format_version' in manifest) {
     checkManifest(manifest)
-    const index = await deepseekIndex(zip), names = zip.names.filter((n) => /^chat_sessions\/[^/]+\.json$/.test(n)), available = new Set(names.map((n) => n.slice(14, -5)))
+    control?.report({ stage: 'index' })
+    const index = await deepseekIndex(zip, signal), names = zip.names.filter((n) => /^chat_sessions\/[^/]+\.json$/.test(n)), available = new Set(names.map((n) => n.slice(14, -5)))
     const order = new Map(index.ids.map((id, i) => [id, i]))
     names.sort((a, b) => (order.get(a.slice(14, -5)) ?? Infinity) - (order.get(b.slice(14, -5)) ?? Infinity))
     const indexVerified = index.verified && index.ids.length === names.length && index.ids.every((id) => available.has(id))
     const warnings = indexVerified ? [] : ['会话索引未通过核验，已按实际文件读取。']
+    const missing = index.ids.filter((id) => !available.has(id))
     const tasks = async function* (): AsyncGenerator<ImportTask> {
-      for (const id of index.ids) if (!available.has(id)) yield { id, title: '', load: async () => { throw new Error('索引中的会话文件缺失') } }
-      for (const name of names) { const id = name.slice(14, -5); yield { id, title: '', load: async () => {
-        const result = await deepseekSession(await zip.get(name), id, zip, repair)
-        const count = index.counts.get(id)
-        if (count !== undefined && count !== result.session.messages.length) throw new Error('会话消息数与索引不一致')
-        return result
-      } } }
+      for (const id of missing) yield { id, title: '', load: async () => { throw new Error('索引中的会话文件缺失') } }
+      for (const name of names) {
+        const id = name.slice(14, -5)
+        yield { id, title: '', load: async () => {
+          const blob = await readEntry(zip, name, 'sessions', control)
+          return deepseekSession(blob, id, zip, repair, index.counts.get(id), control)
+        } }
+      }
     }
-    return { source: 'deepseek', settings: { presets: [] }, warnings, indexVerified, tasks: tasks() }
+    return { source: 'deepseek', settings: { presets: [] }, warnings, indexVerified, total: names.length + missing.length, tasks: tasks() }
   }
   if (manifest.format === 'deepseek-plus-archive') {
     if (manifest.version !== 1 || !Array.isArray(manifest.sessions)) throw new Error('不支持的完整备份版本')
@@ -69,33 +105,44 @@ export const readImportInput = async (file: File, repair: boolean): Promise<Impo
       for (const value of manifest.sessions as unknown[]) {
         const r = record(value), path = text(r.path), id = text(r.id), title = text(r.title)
         yield { id, title, load: async () => {
-          const parsed = readNativeSession(await json(await zip.get(path)), repair)
+          const blob = await readEntry(zip, path, 'sessions', control)
+          control?.report({ stage: 'parsing', bytes: null })
+          const parsed = readNativeSession(await json(blob), repair)
           if (parsed.session.id !== id || r.messages !== undefined && r.messages !== parsed.session.messages.length) throw new Error('会话索引 ID 或消息数不一致')
-          const files: StoredFile[] = [], seen = new Set<string>(); let missingFiles = 0
-          for (const m of parsed.session.messages) for (const f of m.files ?? []) {
-            if (seen.has(f.id)) continue; seen.add(f.id)
-            const entry = paths.get(f.id)
-            if (!entry || !zip.names.includes(entry.path)) { missingFiles++; continue }
-            files.push({ id: f.id, blob: new Blob([await zip.get(entry.path)], { type: entry.mime }) })
+          const files: StoredFile[] = []
+          const ids = new Set(parsed.session.messages.flatMap((m) => (m.files ?? []).map((f) => f.id)))
+          let missingFiles = 0
+          let completed = 0
+          if (ids.size) control?.report({ stage: 'images', records: { completed, total: ids.size } })
+          for (const id of ids) {
+            signal?.throwIfAborted()
+            const entry = paths.get(id)
+            if (entry && zip.has(entry.path)) files.push({ id, blob: new Blob([await zip.get(entry.path)], { type: entry.mime }) })
+            else missingFiles++
+            control?.report({ records: { completed: ++completed, total: ids.size } })
           }
           return { ...parsed, files, missingFiles }
         } }
       }
     }
-    return { source: 'deepseek-plus', settings: { presets: readPresets(settings.presets), ...(settings.defaults ? { defaults: readParameters(settings.defaults) } : {}) }, warnings: [], indexVerified: true, tasks: tasks() }
+    return { source: 'deepseek-plus', settings: { presets: readPresets(settings.presets), ...(settings.defaults ? { defaults: readParameters(settings.defaults) } : {}) }, warnings: [], indexVerified: true, total: manifest.sessions.length, tasks: tasks() }
   }
   if (manifest.format === 'simplechat-archive') {
     if (manifest.version !== 1) throw new Error('不支持的 Simple Chat 归档版本')
-    return blobInput(await zip.get('backup.json'), repair, zip)
+    return blobInput(await readEntry(zip, 'backup.json', 'sessions', control), repair, zip, control)
   }
   if (manifest.format === 'chatbox-backup') {
     const names = zip.names.filter((n) => /^sessions\/.+\.json$/.test(n))
     if (!names.length) throw new Error('没有可导入的 Chatbox 会话')
     const resolve = zipImage(zip, list(manifest.resources))
     const tasks = async function* (): AsyncGenerator<ImportTask> {
-      for (const name of names) yield { id: '', title: name, load: async () => chatboxSession(await json(await zip.get(name)), repair, resolve) }
+      for (const name of names) yield { id: '', title: name, load: async () => {
+        const blob = await readEntry(zip, name, 'sessions', control)
+        control?.report({ stage: 'parsing', bytes: null })
+        return chatboxSession(await json(blob), repair, resolve)
+      } }
     }
-    return { source: 'chatbox', settings: { presets: chatboxPresets(manifest) }, indexVerified: null, warnings: ['Chatbox 仅导入可见消息分支。'], tasks: tasks() }
+    return { source: 'chatbox', settings: { presets: chatboxPresets(manifest) }, indexVerified: null, warnings: ['Chatbox 仅导入可见消息分支。'], total: names.length, tasks: tasks() }
   }
   throw new Error('无法识别此 ZIP 备份')
 }

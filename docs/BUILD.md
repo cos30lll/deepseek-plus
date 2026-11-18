@@ -8,6 +8,7 @@
 pnpm --dir web install --frozen-lockfile
 pnpm --dir web type
 pnpm --dir web test:import
+pnpm --dir web test:markdown
 pnpm --dir web build
 ```
 

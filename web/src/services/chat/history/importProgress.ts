@@ -11,6 +11,8 @@ export type ArchiveReadProgress = {
 export type HistoryImportStage =
   | 'queued'
   | 'checking'
+  | 'reading'
+  | 'parsing'
   | 'preparing'
   | 'directory'
   | 'sessions'
@@ -22,7 +24,9 @@ export type HistoryImportStage =
 export type HistoryImportProgress = {
   stage: HistoryImportStage
   archive: ArchiveReadProgress | null
-  records: { completed: number; total: number } | null
+  records: { completed: number; total: number | null } | null
+  bytes?: { completed: number; total: number } | null
+  current?: { position: number; total: number | null }
   sessions: number
   messages: number
   images: number
@@ -31,17 +35,19 @@ export type HistoryImportProgress = {
 }
 /** 回调只同步更新内存，不在 IndexedDB 事务中等待渲染或开启额外事务。 */
 export type HistoryImportReporter = (update: Partial<HistoryImportProgress>) => void
+export type ImportControl = { signal: AbortSignal; report: HistoryImportReporter }
 
 /** 不随设置弹窗卸载；不持久化归档、账号、消息、图片或错误到日志。 */
 export const useHistoryImportState = create<{
   busy: boolean
+  stopping: boolean
   visible: boolean
   progress: HistoryImportProgress | null
   report: ImportReport | null
   result: number | null
   failed: boolean
   error: unknown
-}>(() => ({ busy: false, visible: false, progress: null, result: null, report: null, failed: false, error: null }))
+}>(() => ({ busy: false, stopping: false, visible: false, progress: null, result: null, report: null, failed: false, error: null }))
 
 export const dismissHistoryImport = () => {
   if (!useHistoryImportState.getState().busy) {

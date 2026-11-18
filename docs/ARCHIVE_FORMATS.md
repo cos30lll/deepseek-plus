@@ -13,6 +13,6 @@ Incremental import skips existing conversation IDs. Replace matches by ID first,
 
 The complete format stores the local data model, including branches, existing attachment originals, settings, recaps and presets. The DeepSeek-compatible export intentionally omits settings, recaps, presets and most non-image file bytes. Foreign clients may have fields the local data model cannot represent; Chatbox import only restores its visible chain. Do not use either export to transfer keys. An already-missing attachment original cannot be reconstructed.
 
-ZIP support is limited to unencrypted, single-volume ZIP32 archives with stored or deflated entries. Android native exports are limited to 64 MiB per file in this snapshot. Keep the app open while migrating large archives.
+ZIP support is limited to unencrypted, single-volume ZIP32 archives with stored or deflated entries. Android native exports are limited to 64 MiB per file in this snapshot. Keep the app open while migrating large archives. Import shows the current chat, the stage and the work done. Stopping an import preserves chats already saved.
 
 Implementation: [archive input dispatch](../web/src/services/chat/history/input.ts), [per-conversation orchestration](../web/src/services/chat/history/importer.ts), [complete export](../web/src/services/chat/history/completeArchive.ts).

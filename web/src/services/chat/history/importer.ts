@@ -3,15 +3,21 @@ import type { Session, SessionSummary } from '../types.js'
 import { errorText, type BackupSettings, type ImportOptions, type ImportReport } from './importTypes.js'
 import { isolateFiles, type ImportInput } from './input.js'
 import { planImport } from './portable.js'
+import type { ImportControl } from './importProgress.js'
+import { BackupReadError } from './readBackup.js'
+import { LocalDatabaseError } from '../storageState.js'
 export type ImportDependencies = {
   summaries(): SessionSummary[]
   settings(): BackupSettings
   saveSettings(settings: BackupSettings): void
-  commit(session: Session, files: StoredFile[], replaceId: string | undefined, report: ImportReport): Promise<void>
+  commit(
+    session: Session, files: StoredFile[], replaceId: string | undefined, report: ImportReport,
+    onProgress?: (completed: number, total: number) => void
+  ): Promise<void>
   committed(session: Session, replaceId?: string): void
   saveReport(report: ImportReport): Promise<void>
 }
-export const newImportReport = (options: ImportOptions): ImportReport => ({ version: 1, source: null, mode: options.mode, startedAt: Date.now(), updatedAt: Date.now(), completed: false, imported: 0, messages: 0, skipped: 0, failed: 0, repaired: 0, missingFiles: 0, presets: 0, indexVerified: null, sessions: [], warnings: [] })
+export { newImportReport } from './importTypes.js'
 const preparePresets = (incoming: BackupSettings, current: BackupSettings, enabled: boolean) => {
   const presets = [...current.presets], mapping = new Map<string, string>()
   let added = 0
@@ -25,16 +31,24 @@ const preparePresets = (incoming: BackupSettings, current: BackupSettings, enabl
   const remap = (ids: string[]) => ids.flatMap((id) => mapping.has(id) ? [mapping.get(id)!] : [])
   return { presets, remap, added, defaults: enabled && incoming.defaults ? { ...current.defaults, ...incoming.defaults, enabledPresetIds: remap(incoming.defaults.enabledPresetIds ?? []) } : current.defaults }
 }
-export const runImport = async (input: ImportInput, options: ImportOptions, deps: ImportDependencies, initial: ImportReport, publish: (report: ImportReport) => void): Promise<ImportReport> => {
+export const runImport = async (input: ImportInput, options: ImportOptions, deps: ImportDependencies, initial: ImportReport, publish: (report: ImportReport) => void, control?: ImportControl): Promise<ImportReport> => {
   let report: ImportReport = { ...initial, source: input.source, indexVerified: input.indexVerified, warnings: [...input.warnings] }
   const show = () => { report = { ...report, updatedAt: Date.now() }; publish(report) }
+  const signal = control?.signal
   try {
+    signal?.throwIfAborted()
     const settings = preparePresets(input.settings, deps.settings(), options.settings)
     if (options.settings) { deps.saveSettings({ presets: settings.presets, defaults: settings.defaults }); report.presets = settings.added }
     else if (input.settings.presets.length || input.settings.defaults) report.warnings.push('未恢复默认参数；仅沿用内容相同的本地预设。')
-    show(); await deps.saveReport(report)
+    show()
+    control?.report({ stage: 'preparing', bytes: null, records: null })
+    await deps.saveReport(report)
+    signal?.throwIfAborted()
+    let position = 0
     const sourceIds = new Set<string>()
     for await (const task of input.tasks) {
+      signal?.throwIfAborted()
+      control?.report({ stage: 'sessions', bytes: null, records: null, current: { position: ++position, total: input.total ?? null } })
       const audit = { sourceId: task.id, title: task.title, messages: 0, repaired: 0, missingFiles: 0 }
       let committed = false
       try {
@@ -44,6 +58,7 @@ export const runImport = async (input: ImportInput, options: ImportOptions, deps
           report = { ...report, skipped: report.skipped + 1, sessions: [...report.sessions, { ...audit, status: 'skipped' }] }
         } else {
           const candidate = await task.load()
+          signal?.throwIfAborted()
           Object.assign(audit, { sourceId: candidate.session.id, title: candidate.session.title })
           if (sourceIds.has(candidate.session.id)) throw new Error('备份内的会话 ID 重复')
           sourceIds.add(candidate.session.id)
@@ -54,20 +69,34 @@ export const runImport = async (input: ImportInput, options: ImportOptions, deps
             const scoped = isolateFiles({ ...candidate, session: plan.session }), session = scoped.session
             if (session.chatSettings?.enabledPresetIds) session.chatSettings = { ...session.chatSettings, enabledPresetIds: settings.remap(session.chatSettings.enabledPresetIds) }
             const next: ImportReport = { ...report, updatedAt: Date.now(), imported: report.imported + 1, messages: report.messages + session.messages.length, repaired: report.repaired + candidate.repaired, missingFiles: report.missingFiles + candidate.missingFiles, sessions: [...report.sessions, { ...audit, status: 'imported', targetId: session.id, messages: session.messages.length, repaired: candidate.repaired, missingFiles: candidate.missingFiles }] }
-            await deps.commit(session, scoped.files, plan.replaceId, next)
-            report = next; committed = true; deps.committed(session, plan.replaceId)
+            const total = scoped.files.length + 1
+            control?.report({ stage: 'committing', bytes: null, records: { completed: 0, total } })
+            signal?.throwIfAborted()
+            await deps.commit(session, scoped.files, plan.replaceId, next, control
+              ? (completed, total) => control.report({ records: { completed, total } })
+              : undefined)
+            report = next
+            committed = true
+            deps.committed(session, plan.replaceId)
+            control?.report({ records: { completed: total, total } })
           }
         }
       } catch (error) {
-        if (committed) throw error
+        if (committed || signal?.aborted || error instanceof BackupReadError ||
+          error instanceof LocalDatabaseError && error.key === 'historyImportWriteTimeout') throw error
         report = { ...report, failed: report.failed + 1, sessions: [...report.sessions, { ...audit, status: 'failed', reason: errorText(error) }] }
       }
       show()
       if (!committed) await deps.saveReport(report)
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
     }
+    signal?.throwIfAborted()
     report = { ...report, completed: true }
-  } catch (error) { report = { ...report, fatal: errorText(error), completed: false } }
+  } catch (error) {
+    report = signal?.aborted
+      ? { ...report, completed: false, cancelled: true }
+      : { ...report, completed: false, fatal: errorText(error) }
+  }
   show()
   try { await deps.saveReport(report) } catch { report = { ...report, warnings: [...report.warnings, '报告未能保存到本机，可在关闭窗口前导出。'] }; show() }
   return report

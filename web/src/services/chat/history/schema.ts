@@ -197,7 +197,7 @@ const fragment: Read<Fragment | null> = (value) => {
   }
 }
 
-const message: Read<ChatMessage> = (value) => {
+export const readSessionMessage: Read<ChatMessage> = (value) => {
   const item = record(value)
   return {
     id: count(item.id),
@@ -249,7 +249,7 @@ export const readSessionIndex: Read<SessionIndexEntry[]> = list((value) => {
   }
 })
 
-export const readSessionFile: Read<SessionFile> = (value) => {
+export const readSessionMetadata: Read<Omit<SessionFile, 'messages'>> = (value) => {
   const item = record(value)
   return {
     id: sessionId(item.id),
@@ -258,6 +258,10 @@ export const readSessionFile: Read<SessionFile> = (value) => {
     current_message_id: count(item.current_message_id),
     inserted_at: time(item.inserted_at),
     updated_at: time(item.updated_at),
-    messages: list(message)(item.messages),
   }
 }
+
+export const readSessionFile: Read<SessionFile> = (value) => ({
+  ...readSessionMetadata(value),
+  messages: list(readSessionMessage)(record(value).messages),
+})

@@ -64,6 +64,16 @@ export function toMdAst(
       ;(node as Parent).children = node.children.flatMap(simplify) as RootContent[]
     }
     switch (node.type) {
+      case 'paragraph': {
+        const [child] = node.children
+        if (node.children.length !== 1 || child.type !== 'text' || !child.position) return [node]
+        const source = raw(child)
+        const label = /^\*\*([^\s*][^*\r\n]{0,79}?[：:])[ \t\u3000]+\*\*[ \t\u3000]*$/u.exec(source)
+        if (label && source.trimEnd() === child.value.trimEnd()) {
+          node.children = [{ type: 'strong', children: [text(label[1])] }]
+        }
+        return [node]
+      }
       case 'link':
         return disableLink ? node.children : [node]
       case 'delete': {

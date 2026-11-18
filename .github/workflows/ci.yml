@@ -30,4 +30,5 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm type
       - run: pnpm test:import
+      - run: pnpm test:markdown
       - run: pnpm build

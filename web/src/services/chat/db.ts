@@ -376,25 +376,75 @@ export const reportStorageError = (action: string) => (error: unknown) => {
   console.error(`[storage] ${action} failed`, error)
 }
 
-/** One imported conversation and its originals commit together; failed replacement preserves the old row. */
-export const commitImportedSession = async (session: Session, files: StoredFile[], replaceId?: string, report?: unknown): Promise<void> => {
-  const tx = (await getDB()).transaction(['sessions', 'sessionSummaries', 'files', 'metadata'], 'readwrite')
-  const done = tx.done
-  void done.catch(() => {})
+/** Abort stalled import writes and wait for IndexedDB to confirm the outcome. */
+const importWrite = async <T>(
+  tx: { abort(): void; done: Promise<void> },
+  write: (touch: () => void) => Promise<T>
+): Promise<T> => {
+  let stalled = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const touch = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      stalled = true
+      abortTransaction(tx)
+    }, 30_000)
+  }
+  void tx.done.catch(() => {})
+  touch()
   try {
+    const result = await write(touch)
+    await tx.done
+    return result
+  } catch (error) {
+    abortTransaction(tx)
+    await tx.done.catch(() => {})
+    throw stalled ? new LocalDatabaseError('historyImportWriteTimeout') : error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** One imported conversation and its originals commit together. */
+export const commitImportedSession = async (
+  session: Session,
+  files: StoredFile[],
+  replaceId?: string,
+  report?: unknown,
+  onProgress?: (completed: number, total: number) => void
+): Promise<void> => {
+  const total = files.length + 1
+  const tx = (await getDB()).transaction(['sessions', 'sessionSummaries', 'files', 'metadata'], 'readwrite')
+  await importWrite(tx, async (touch) => {
+    const sessions = tx.objectStore('sessions')
     const summaries = tx.objectStore('sessionSummaries')
+    const originals = tx.objectStore('files')
     const previous = replaceId ? await summaries.get(replaceId) : undefined
     if (replaceId && replaceId !== session.id) {
-      await tx.objectStore('sessions').delete(replaceId)
+      await sessions.delete(replaceId)
       await summaries.delete(replaceId)
     }
-    for (const file of files) await tx.objectStore('files').put(file)
-    await tx.objectStore('sessions').put(session)
+    // Keep a small batch in flight. A failure still rolls back the whole conversation.
+    const batchSize = 8
+    for (let i = 0; i < files.length; i += batchSize) {
+      const batch = files.slice(i, i + batchSize)
+      await Promise.all(batch.map(async (file) => originals.put(file)))
+      touch()
+      onProgress?.(i + batch.length, total)
+    }
+    await sessions.put(session)
+    touch()
     await summaries.put(storedSummary(session))
-    for (const id of previous?.fileIds ?? []) if (await summaries.index('fileIds').count(id) === 0) await tx.objectStore('files').delete(id)
+    for (const id of previous?.fileIds ?? []) {
+      if (await summaries.index('fileIds').count(id) === 0) await originals.delete(id)
+      touch()
+    }
     if (report !== undefined) await tx.objectStore('metadata').put({ id: 'last-import-report', value: report })
-    await done
-  } catch (error) { abortTransaction(tx); await done.catch(() => {}); throw error }
+    touch()
+  })
 }
-export const saveImportReport = async (value: unknown): Promise<void> => { await (await getDB()).put('metadata', { id: 'last-import-report', value }) }
+export const saveImportReport = async (value: unknown): Promise<void> => {
+  const tx = (await getDB()).transaction('metadata', 'readwrite')
+  await importWrite(tx, () => tx.store.put({ id: 'last-import-report', value }))
+}
 export const loadImportReport = async (): Promise<unknown> => (await (await getDB()).get('metadata', 'last-import-report'))?.value

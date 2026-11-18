@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
-import { historyWindow } from '../../services/chat/historyWindow.js'
-import { LightweightHistoryContext } from './renderMode.js'
+import { historyWindow, HISTORY_PAGE_SIZE } from '../../services/chat/historyWindow.js'
 import { Button } from '../base/Button.js'
 import { useIsMobile } from '../../app/viewport.js'
 import {
@@ -172,13 +171,13 @@ export const MessageList = ({
               {windowed.start > 0 ? <Button variant="outlined" size="s" onClick={() => changePage(messages[windowed.start - 1].id)}>{t('historyPreviousPage')}</Button> : null}
               <span>{t('historyPagePosition', { start: messages.length ? windowed.start + 1 : 0, end: windowed.end, total: messages.length })}</span>
               {windowed.end < messages.length ? <>
-                <Button variant="outlined" size="s" onClick={() => changePage(windowed.end + 12 >= messages.length ? null : messages[windowed.end + 11].id)}>{t('historyNextPage')}</Button>
+                <Button variant="outlined" size="s" onClick={() => changePage(windowed.end + HISTORY_PAGE_SIZE >= messages.length ? null : messages[windowed.end + HISTORY_PAGE_SIZE - 1].id)}>{t('historyNextPage')}</Button>
                 <Button variant="outlined" size="s" onClick={() => changePage(null)}>{t('historyLatestPage')}</Button>
               </> : null}
             </div>
             {windowed.messages.map((message, localIndex) => {
               const index = windowed.start + localIndex
-              return <LightweightHistoryContext.Provider key={message.id} value={!streaming || index !== lastIndex}>{message.role === 'user' ? (
+              return message.role === 'user' ? (
                 <UserMessage
                   key={message.id}
                   sessionId={session.id}
@@ -201,7 +200,7 @@ export const MessageList = ({
                   versions={versions.get(message.id) ?? EMPTY_VERSIONS}
                   onSelectVersion={selectVersion}
                 />
-              )}</LightweightHistoryContext.Provider>
+              )
             })}
           </div>
         </div>

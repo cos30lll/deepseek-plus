@@ -107,12 +107,10 @@ def build(args):
         classes, dex = work / 'classes', work / 'dex'
         classes.mkdir()
         dex.mkdir()
-        assets = work / 'assets'
-        shutil.copytree(dist, assets / 'www')
         res, unsigned, aligned = (work / name for name in ('res.zip', 'unsigned.apk', 'aligned.apk'))
         run(aapt2, 'compile', '--dir', ROOT / 'android' / 'res', '-o', res)
         run(aapt2, 'link', '-I', android_jar, '--manifest', manifest, '--min-sdk-version', min_api,
-            '--target-sdk-version', target_api, '-A', assets, '-o', unsigned, res)
+            '--target-sdk-version', target_api, '-o', unsigned, res)
         sources = sorted((ROOT / 'android' / 'src').rglob('*.java'))
         run(javac, '-encoding', 'UTF-8', '-source', '8', '-target', '8', '-cp', android_jar, '-d', classes, *sources)
         jar = work / 'host.jar'
@@ -121,6 +119,10 @@ def build(args):
                 z.write(item, item.relative_to(classes).as_posix())
         run(java, '-cp', d8, 'com.android.tools.r8.D8', '--min-api', min_api, '--lib', android_jar, '--output', dex, jar)
         with zipfile.ZipFile(unsigned, 'a', compression=zipfile.ZIP_DEFLATED) as z:
+            # WebView asset URLs need forward slashes on every build host.
+            for asset in sorted(dist.rglob('*')):
+                if asset.is_file():
+                    z.write(asset, 'assets/www/' + asset.relative_to(dist).as_posix())
             for item in sorted(dex.glob('classes*.dex')):
                 z.write(item, item.name)
         align_apk(unsigned, aligned)

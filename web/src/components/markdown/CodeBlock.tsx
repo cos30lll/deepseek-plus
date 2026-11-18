@@ -82,28 +82,33 @@ export const CodeBlock = memo(function CodeBlock({
   const t = useTranslate()
   const isMermaid = infostring.toLowerCase() === 'mermaid'
   const [showDiagram, setShowDiagram] = useState(false)
-  const [highlight, setHighlight] = useState(false)
-  // 语言包注册在全局 Prism 上，每次渲染直接判断；加载完成后触发一次重渲染
+  const [requestedHighlight, setRequestedHighlight] = useState(false)
   const rerender = useReducer((n: number) => n + 1, 0)[1]
-  const lang = getHighlightLang(infostring)
+  const lang = getHighlightLang(infostring.toLowerCase())
+  const canHighlight = !isMermaid && lang !== null && code.length <= 16_000
+  const highlight = canHighlight && !loading && (requestedHighlight || code.length <= 4000)
   const loaded = lang !== null && isHighlightLoaded(lang)
   useEffect(() => {
     if (!highlight || lang === null || loaded) {
       return
     }
     let unmounted = false
-    loadHighlight(lang).then(() => {
-      if (!unmounted) {
-        rerender()
-      }
+    void loadHighlight(lang).then(() => {
+      if (!unmounted) rerender()
+    }, () => {
+      // A missing language chunk still leaves readable and copyable code.
     })
     return () => {
       unmounted = true
     }
   }, [highlight, lang, loaded, rerender])
   const renderedHtml = useMemo(() => {
-    if (!highlight || code.length > 16000 || lang === null || !loaded) return null
-    return Prism.highlight(code, Prism.languages[lang], lang)
+    if (!highlight || lang === null || !loaded) return null
+    try {
+      return Prism.highlight(code, Prism.languages[lang], lang)
+    } catch {
+      return null
+    }
   }, [code, lang, loaded, highlight])
   return (
     <div className="md-code-block">
@@ -115,7 +120,11 @@ export const CodeBlock = memo(function CodeBlock({
           onToggleDiagram={isMermaid ? () => setShowDiagram((show) => !show) : undefined}
         />
       </div>
-      {!highlight && !isMermaid && code.length <= 16000 ? <button type="button" className="ds-markdown-render-action" onClick={() => setHighlight(true)}>{t('historyHighlightCode')}</button> : null}
+      {canHighlight && !highlight && !loading ? (
+        <button type="button" className="ds-markdown-render-action" onClick={() => setRequestedHighlight(true)}>
+          {t('historyHighlightCode')}
+        </button>
+      ) : null}
       {isMermaid && showDiagram ? (
         <MermaidDiagram code={code} loading={loading} />
       ) : (

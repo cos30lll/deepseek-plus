@@ -41,7 +41,7 @@ const pump = () => {
       worker.onmessageerror = () => { if (worker === instance) finish(null, true) }
     }
     // 只控制解析工作线程；超时降级为原文，不会修改消息或打断会话。
-    timer = setTimeout(() => finish(null, true), 2000)
+    timer = setTimeout(() => finish(null, true), 6000)
     worker.postMessage({ id: job.id, content: job.content, sources: job.sources, disableLink: job.disableLink })
   } catch {
     // 不递归地在不支持 Worker 的环境批量失败，给 UI 留出绘制机会。

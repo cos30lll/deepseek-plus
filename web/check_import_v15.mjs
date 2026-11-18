@@ -40,14 +40,14 @@ const file = (v, name = 'backup.json') => new File([json(v)], name)
 const native = (id, title = id) => ({ id, title, createdAt: 1, updatedAt: 2, rootMessageId: 'u', messages: [{ id: 'u', role: 'user', parentId: null, selectedChildId: 'a', content: 'question', files: [], createdAt: 1 }, { id: 'a', parentId: 'u', role: 'assistant', model: 'model', status: 'done', prefix: false, blocks: [{ type: 'thinking', thinking: 'reason', elapsedSeconds: 1.5 }, { type: 'text', text: 'answer' }], createdAt: 2 }] })
 const foreign = (id, title = id) => ({ id, title, createdAt: 1, updatedAt: 2, messages: [{ id: 'u', parentId: null, active: true, role: 'user', content: 'question', createdAt: 1 }, { id: 'a', parentId: 'u', active: true, role: 'assistant', content: 'answer', reasoning: 'reason', createdAt: 2 }] })
 const simple = (conversations, presets = []) => ({ format: 'simplechat-backup', version: 2, conversations, presets })
-const run = async (f, options = opts()) => {
+const run = async (f, options = opts(), control, onReport = () => {}) => {
   let summaries = await db.loadSessionSummaries()
-  return runImport(await readImportInput(f, options.repair), options, {
+  return runImport(await readImportInput(f, options.repair, control), options, {
     summaries: () => summaries, settings: () => settings, saveSettings: (s) => { settings = structuredClone(s) },
     commit: db.commitImportedSession,
     committed: (session, id) => { summaries = [...summaries.filter((s) => s.id !== session.id && s.id !== id), session] },
     saveReport: db.saveImportReport,
-  }, newImportReport(options), () => {})
+  }, newImportReport(options), onReport, control)
 }
 const tests = []
 const test = async (name, fn) => { if (process.env.IMPORT_CASE && process.env.IMPORT_CASE !== name) return; await fn(); tests.push(name); console.log('PASS', name) }
@@ -130,19 +130,75 @@ await test('stream_chunks_and_invalid_tail_preserves_commits', async () => {
   const r = await run(malformed); assert.equal(r.completed, false); assert.ok(r.fatal); assert.equal(r.imported, 1); assert.ok(await db.loadSession('before-invalid'))
   const persisted = await db.loadImportReport(); assert.equal(persisted.imported, 1); assert.ok(persisted.fatal)
 })
+await test('stop_after_first_commit', async () => {
+  const controller = new AbortController()
+  const input = file(simple([foreign('stopped-kept'), foreign('stopped-pending')]))
+  const r = await run(input, opts(), { signal: controller.signal, report: () => {} }, (r) => {
+    if (r.imported === 1) controller.abort()
+  })
+  assert.equal(r.cancelled, true)
+  assert.equal(r.failed, 0)
+  assert.equal(r.imported, 1)
+  assert.ok(await db.loadSession('stopped-kept'))
+  assert.equal(await db.loadSession('stopped-pending'), undefined)
+  assert.equal((await db.loadImportReport()).cancelled, true)
+})
+
 let realArchive
 const originalPath = process.argv[2]
-if (originalPath) await test('deepseek_archive_read_only', async () => {
-  const input = await readImportInput(new File([readFileSync(originalPath)], 'deepseek.zip'), true)
-  assert.equal(input.source, 'deepseek')
-  let sessions = 0, messages = 0, visibleMessages = 0
-  for await (const task of input.tasks) {
-    const candidate = await task.load()
-    sessions++
-    messages += candidate.session.messages.length
-    visibleMessages += getVisibleMessages(candidate.session).length
+if (originalPath) await test('deepseek_archive_in_memory_commit', async () => {
+  const stages = new Set()
+  const positions = new Set()
+  let currentStage
+  let firstAttachmentCount
+  let firstSavedAt
+  const started = performance.now()
+  const controller = new AbortController()
+  const control = { signal: controller.signal, report(update) {
+    if (update.stage) {
+      currentStage = update.stage
+      stages.add(update.stage)
+    }
+    if (update.current) positions.add(update.current.position)
+    if (positions.size === 1 && currentStage === 'images' && update.records) firstAttachmentCount = update.records.total
+  } }
+  const originalBytes = readFileSync(originalPath)
+  const backup = new File([originalBytes], 'deepseek.zip')
+  const report = await run(backup, opts(), control, (progress) => {
+    if (progress.imported === 1) firstSavedAt ??= performance.now()
+  })
+  assert.equal(report.source, 'deepseek')
+  assert.equal(report.completed, true, report.fatal)
+  assert.equal(report.failed, 0, JSON.stringify(report.sessions.filter(({ status }) => status === 'failed').map(({ reason }) => reason)))
+  assert.ok(report.imported > 0)
+  assert.equal(positions.size, report.imported)
+  assert.ok(['directory', 'index', 'preparing', 'sessions', 'parsing', 'validating', 'committing'].every((stage) => stages.has(stage)))
+  let messages = 0, visibleMessages = 0, attachments = 0
+  for (const entry of report.sessions) {
+    const session = await db.loadSession(entry.targetId)
+    assert.equal(session.messages.length, entry.messages)
+    messages += session.messages.length
+    visibleMessages += getVisibleMessages(session).length
+    const files = new Map(session.messages.flatMap((m) => (m.files ?? []).map((f) => [f.id, f])))
+    for (const f of files.values()) {
+      const original = await db.loadFile(f.id)
+      if (original) {
+        assert.ok(original.size > 0)
+        attachments++
+      }
+    }
   }
-  realArchive = { sessions, messages, visibleMessages, indexVerified: input.indexVerified }
+  assert.equal(messages, report.messages)
+  assert.equal((await db.loadImportReport()).completed, true)
+  const repeated = await run(backup)
+  assert.equal(repeated.skipped, report.imported)
+  assert.equal(repeated.imported, 0)
+  realArchive = {
+    sessions: report.imported, messages, visibleMessages, attachments,
+    missingFiles: report.missingFiles, firstAttachmentCount,
+    indexVerified: report.indexVerified, repeatSkipped: repeated.skipped,
+    firstSavedMs: Math.round(firstSavedAt - started), stages: [...stages],
+  }
 })
 await test('deepseek_blocks_and_index_fallback', async () => {
   const { toSessionFile, toIndexEntry } = await import(new URL('history/toArchive.ts', base))
@@ -166,5 +222,5 @@ await test('deepseek_blocks_and_index_fallback', async () => {
   let count = 0; for await (const t of input.tasks) { await t.load(); count++ } assert.equal(count, 1)
 })
 const result = { passed: tests.length, tests, realArchive, isolatedInMemoryDatabase: true, userDatabaseWritten: false, appStarted: false, installed: false, requestsSent: 0 }
-console.log('IMPORT_V14_OK', JSON.stringify(result))
+console.log('IMPORT_V15_OK', JSON.stringify(result))
 db.reconnectDatabase()

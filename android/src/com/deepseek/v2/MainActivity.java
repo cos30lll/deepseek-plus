@@ -28,13 +28,14 @@ public final class MainActivity extends Activity {
     WebView web; volatile boolean destroyed; final Handler main=new Handler(Looper.getMainLooper());
     final ExecutorService workers=Executors.newFixedThreadPool(4);
     final ConcurrentHashMap<String,Job> jobs=new ConcurrentHashMap<>();
-    ValueCallback<Uri[]> filePicker; PermissionRequest microphone; byte[] exportBytes;
+    DocumentPicker filePicker; PermissionRequest microphone; byte[] exportBytes;
     static final class Job { final AtomicBoolean stopped=new AtomicBoolean(); volatile HttpURLConnection connection; }
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().setStatusBarColor(Color.rgb(245,246,248));getWindow().setNavigationBarColor(Color.rgb(245,246,248));
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        filePicker = new DocumentPicker(this, this::notifyUser);
         web=new WebView(this);setContentView(web);
         WebSettings settings=web.getSettings();settings.setJavaScriptEnabled(true);settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);settings.setAllowContentAccess(true);settings.setJavaScriptCanOpenWindowsAutomatically(false);
@@ -67,8 +68,8 @@ public final class MainActivity extends Activity {
         });
         web.setWebChromeClient(new WebChromeClient(){
             @Override public boolean onShowFileChooser(WebView view,ValueCallback<Uri[]> result,FileChooserParams params){
-                if(filePicker!=null)filePicker.onReceiveValue(null);filePicker=result;
-                try{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,params.getMode()==FileChooserParams.MODE_OPEN_MULTIPLE);startActivityForResult(intent,10);}catch(Exception e){filePicker.onReceiveValue(null);filePicker=null;notifyUser("没有可用的文件选择器");}
+                if (trusted()) filePicker.open(result, params);
+                else result.onReceiveValue(null);
                 return true;
             }
             @Override public void onPermissionRequest(PermissionRequest request){
@@ -150,9 +151,9 @@ public final class MainActivity extends Activity {
     }
     @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] results){super.onRequestPermissionsResult(code,permissions,results);if(code==20&&microphone!=null){if(results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED&&trusted())microphone.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});else microphone.deny();microphone=null;}}
     @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);
-        if(request==10&&filePicker!=null){ValueCallback<Uri[]> callback=filePicker;filePicker=null;List<Uri> files=new ArrayList<>();if(result==RESULT_OK&&data!=null){ClipData clip=data.getClipData();if(clip!=null){for(int i=0;i<clip.getItemCount();i++)files.add(clip.getItemAt(i).getUri());}else if(data.getData()!=null)files.add(data.getData());}callback.onReceiveValue(files.isEmpty()?null:files.toArray(new Uri[0]));}
+        if (request == DocumentPicker.REQUEST && filePicker != null) filePicker.onResult(result, data);
         if(request==11){byte[] bytes=exportBytes;exportBytes=null;if(bytes!=null&&result==RESULT_OK&&data!=null&&data.getData()!=null){Uri uri=data.getData();workers.execute(()->{try(OutputStream stream=getContentResolver().openOutputStream(uri)){if(stream==null)throw new IOException();stream.write(bytes);notifyUser("文件已保存");}catch(Exception e){notifyUser("文件保存失败");}});}}
     }
     @Override public void onBackPressed(){web.evaluateJavascript("window.__sourceBack?window.__sourceBack():false",result->{if("false".equals(result))moveTaskToBack(true);});}
-    @Override protected void onDestroy(){destroyed=true;for(Job job:jobs.values()){job.stopped.set(true);if(job.connection!=null){HttpURLConnection c=job.connection;new Thread(c::disconnect,"api-close").start();}}jobs.clear();workers.shutdownNow();if(filePicker!=null)filePicker.onReceiveValue(null);if(microphone!=null)microphone.deny();if(web!=null){web.removeJavascriptInterface("NativeApi");web.stopLoading();web.destroy();}super.onDestroy();}
+    @Override protected void onDestroy(){destroyed=true;for(Job job:jobs.values()){job.stopped.set(true);if(job.connection!=null){HttpURLConnection c=job.connection;new Thread(c::disconnect,"api-close").start();}}jobs.clear();workers.shutdownNow();if(filePicker!=null)filePicker.destroy();if(microphone!=null)microphone.deny();if(web!=null){web.removeJavascriptInterface("NativeApi");web.stopLoading();web.destroy();}super.onDestroy();}
 }

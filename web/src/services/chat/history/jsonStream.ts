@@ -1,16 +1,33 @@
+import { readBackupBuffer } from './readBackup.js'
+
+const JSON_CHUNK_BYTES = 256 * 1024
+
 /** Buffered JSON reader. Arrays are consumed one item at a time; skipped values are never accumulated. */
 export class JsonReader {
-  private reader: ReadableStreamDefaultReader<Uint8Array>
   private decoder = new TextDecoder('utf-8', { fatal: true })
-  private buffer = ''; private offset = 0; private ended = false; private lastYield = performance.now()
-  constructor(blob: Blob) { this.reader = blob.stream().getReader() }
+  private buffer = ''
+  private offset = 0
+  private position = 0
+  private lastYield = performance.now()
+
+  constructor(private blob: Blob, private signal?: AbortSignal) {}
+
   private async fill(): Promise<boolean> {
+    this.signal?.throwIfAborted()
     if (this.offset < this.buffer.length) return true
-    if (this.ended) return false
-    if (performance.now() - this.lastYield >= 40) { await new Promise<void>((resolve) => setTimeout(resolve, 0)); this.lastYield = performance.now() }
-    const { value, done } = await this.reader.read()
-    this.buffer = this.decoder.decode(value, { stream: !done }); this.offset = 0; this.ended = done
-    return this.buffer.length > 0 || !done && this.fill()
+    while (this.position < this.blob.size) {
+      if (performance.now() - this.lastYield >= 40) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        this.lastYield = performance.now()
+      }
+      const end = Math.min(this.position + JSON_CHUNK_BYTES, this.blob.size)
+      const chunk = await readBackupBuffer(this.blob.slice(this.position, end), this.signal)
+      this.position = end
+      this.buffer = this.decoder.decode(chunk, { stream: end < this.blob.size })
+      this.offset = 0
+      if (this.buffer.length) return true
+    }
+    return false
   }
   async peek(): Promise<string> {
     while (await this.fill()) {
@@ -56,7 +73,6 @@ export class JsonReader {
   }
   async value(): Promise<unknown> { return JSON.parse(await this.raw()) }
   async end(): Promise<void> { if (await this.peek()) throw new Error('JSON 尾部有多余内容') }
-  async close(): Promise<void> { await this.reader.cancel().catch(() => {}); this.reader.releaseLock() }
   async *array(): AsyncGenerator<unknown> {
     await this.take('[')
     if (await this.peek() !== ']') {
@@ -80,14 +96,23 @@ export class JsonReader {
     await this.take('}'); await this.end()
   }
 }
-export const objectMetadata = async (blob: Blob, skipped: Set<string>): Promise<Record<string, unknown>> => {
-  const reader = new JsonReader(blob), result: Record<string, unknown> = Object.create(null)
-  try { for await (const key of reader.keys()) { if (skipped.has(key)) { if (await reader.peek() !== '[') throw new Error('消息列表格式无效'); await reader.raw(false); result[key] = null } else result[key] = await reader.value() } }
-  finally { await reader.close() }
+export const objectMetadata = async (blob: Blob, skipped: Set<string>, signal?: AbortSignal): Promise<Record<string, unknown>> => {
+  const reader = new JsonReader(blob, signal)
+  const result: Record<string, unknown> = Object.create(null)
+  for await (const key of reader.keys()) {
+    if (skipped.has(key)) {
+      if (await reader.peek() !== '[') throw new Error('消息列表格式无效')
+      await reader.raw(false)
+      result[key] = null
+    } else result[key] = await reader.value()
+  }
   return result
 }
-export async function* objectArray(blob: Blob, name: string): AsyncGenerator<unknown> {
-  const reader = new JsonReader(blob)
-  try { for await (const key of reader.keys()) { if (key === name) yield* reader.array(); else await reader.raw(false) } }
-  finally { await reader.close() }
+
+export async function* objectArray(blob: Blob, name: string, signal?: AbortSignal): AsyncGenerator<unknown> {
+  const reader = new JsonReader(blob, signal)
+  for await (const key of reader.keys()) {
+    if (key === name) yield* reader.array()
+    else await reader.raw(false)
+  }
 }

@@ -1,19 +1,22 @@
 {
   "name": "deepseek-plus",
-  "version": "1.0.13-plus14",
+  "version": "1.0.13-plus16",
   "description": "Community Web and Android chat client based on deepseek-ai/chat-demo.",
   "license": "MIT",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.20.0",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "rspack serve -c rspack.config.ts",
     "build": "rspack build --node-env production -c rspack.config.ts",
     "type": "tsc -p tsconfig.json",
     "lint": "oxlint src rspack.config.ts",
     "format": "oxfmt --write .",
-    "test:import": "node check_import_v14.mjs"
+    "test:import": "node check_import_v15.mjs",
+    "test:markdown": "node check_markdown_v16.mjs"
   },
   "dependencies": {
     "@types/katex": "^0.16.5",
